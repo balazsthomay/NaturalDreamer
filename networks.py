@@ -26,10 +26,10 @@ class PriorNet(nn.Module):
         self.latentLength = latentLength
         self.latentClasses = latentClasses
         self.latentSize = latentLength*latentClasses
-        self.mlp = sequentialModel1D(inputSize, [self.config.hiddenSize]*self.config.numLayers, self.latentSize, self.config.activation)
+        self.network = sequentialModel1D(inputSize, [self.config.hiddenSize]*self.config.numLayers, self.latentSize, self.config.activation)
     
     def forward(self, x):
-        rawLogits = self.mlp(x)
+        rawLogits = self.network(x)
 
         probabilities = rawLogits.view(-1, self.latentLength, self.latentClasses).softmax(-1)
         uniform = torch.ones_like(probabilities)/self.latentClasses
@@ -47,10 +47,10 @@ class PosteriorNet(nn.Module):
         self.latentLength = latentLength
         self.latentClasses = latentClasses
         self.latentSize = latentLength*latentClasses
-        self.mlp = sequentialModel1D(inputSize, [self.config.hiddenSize]*self.config.numLayers, self.latentSize, self.config.activation)
+        self.network = sequentialModel1D(inputSize, [self.config.hiddenSize]*self.config.numLayers, self.latentSize, self.config.activation)
     
     def forward(self, x):
-        rawLogits = self.mlp(x)
+        rawLogits = self.network(x)
 
         probabilities = rawLogits.view(-1, self.latentLength, self.latentClasses).softmax(-1)
         uniform = torch.ones_like(probabilities)/self.latentClasses
