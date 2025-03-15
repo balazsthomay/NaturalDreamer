@@ -14,7 +14,7 @@ class GymPixelsProcessingWrapper(gym.ObservationWrapper):
         super().__init__(env)
         observationSpace = self.observation_space
         newObsShape = observationSpace.shape[-1:] + observationSpace.shape[:2]
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=newObsShape, dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=0, high=1, shape=newObsShape, dtype=np.float32)
 
     def observation(self, observation):
         observation = np.transpose(observation, (2, 0, 1))/255.0

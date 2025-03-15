@@ -131,7 +131,6 @@ class Actor(nn.Module):
         self.register_buffer("actionScale", ((torch.tensor(actionHigh, device=device) - torch.tensor(actionLow, device=device)) / 2.0))
         self.register_buffer("actionBias", ((torch.tensor(actionHigh, device=device) + torch.tensor(actionLow, device=device)) / 2.0))
 
-
     def forward(self, x, training=False):
         logStdMin, logStdMax = -5, 2
         mean, logStd = self.network(x).chunk(2, dim=-1)

@@ -48,15 +48,17 @@ class Dreamer:
         self.totalEnvSteps      = 0
         self.totalGradientSteps = 0
 
+
     def worldModelTraining(self, data):
-        data.encodedObservation = self.encoder(data.observation.view(-1, *self.observationShape)).view(self.config.batchSize, self.config.batchLength, -1)
-        previousRecurrentState, previousLatentState = torch.zeros(len(data.action), self.recurrentSize, device=self.device), torch.zeros(len(data.action), self.latentSize, device=self.device)
+        encodedObservations = self.encoder(data.observations.view(-1, *self.observationShape)).view(self.config.batchSize, self.config.batchLength, -1)
+        previousRecurrentState  = torch.zeros(self.config.batchSize, self.recurrentSize,    device=self.device)
+        previousLatentState     = torch.zeros(self.config.batchSize, self.latentSize,       device=self.device)
 
         recurrentStates, priorsLogits, posteriors, posteriorsLogits = [], [], [], []
         for t in range(1, self.config.batchLength):
-            recurrentState              = self.recurrentModel(previousRecurrentState, previousLatentState, data.action[:, t-1])
+            recurrentState              = self.recurrentModel(previousRecurrentState, previousLatentState, data.actions[:, t-1])
             _, priorLogits              = self.priorNet(recurrentState)
-            posterior, posteriorLogits  = self.posteriorNet(torch.cat((recurrentState, data.encodedObservation[:, t]), -1))
+            posterior, posteriorLogits  = self.posteriorNet(torch.cat((recurrentState, encodedObservations[:, t]), -1))
 
             recurrentStates.append(recurrentState)
             priorsLogits.append(priorLogits)
@@ -66,18 +68,18 @@ class Dreamer:
             previousRecurrentState = recurrentState
             previousLatentState    = posterior
 
-        recurrentStates             = torch.stack(recurrentStates,              dim=1)
-        priorsLogits                = torch.stack(priorsLogits,                 dim=1)
-        posteriors                  = torch.stack(posteriors,                   dim=1)
-        posteriorsLogits            = torch.stack(posteriorsLogits,             dim=1)
-        fullStates                  = torch.cat((recurrentStates, posteriors), dim=-1)
+        recurrentStates             = torch.stack(recurrentStates,              dim=1) # (batchSize, batchLength-1, recurrentSize)
+        priorsLogits                = torch.stack(priorsLogits,                 dim=1) # (batchSize, batchLength-1, latentLength, latentClasses)
+        posteriors                  = torch.stack(posteriors,                   dim=1) # (batchSize, batchLength-1, latentLength*latentClasses)
+        posteriorsLogits            = torch.stack(posteriorsLogits,             dim=1) # (batchSize, batchLength-1, latentLength, latentClasses)
+        fullStates                  = torch.cat((recurrentStates, posteriors), dim=-1) # (batchSize, batchLength-1, recurrentSize + latentLength*latentClasses)
 
         reconstructionMeans        =  self.decoder(fullStates.view(-1, self.fullStateSize)).view(self.config.batchSize, self.config.batchLength-1, *self.observationShape)
         reconstructionDistribution =  Independent(Normal(reconstructionMeans, 1), len(self.observationShape))
-        reconstructionLoss         = -reconstructionDistribution.log_prob(data.observation[:, 1:]).mean()
+        reconstructionLoss         = -reconstructionDistribution.log_prob(data.observations[:, 1:]).mean()
 
         rewardDistribution  =  self.rewardPredictor(fullStates)
-        rewardLoss          = -rewardDistribution.log_prob(data.reward[:, 1:].squeeze(-1)).mean()
+        rewardLoss          = -rewardDistribution.log_prob(data.rewards[:, 1:].squeeze(-1)).mean()
 
         priorDistribution       = Independent(OneHotCategoricalStraightThrough(logits=priorsLogits              ), 1)
         priorDistributionSG     = Independent(OneHotCategoricalStraightThrough(logits=priorsLogits.detach()     ), 1)
@@ -96,7 +98,7 @@ class Dreamer:
         
         if self.config.useContinuationPrediction:
             continueDistribution = self.continuePredictor(fullStates)
-            continueLoss         = nn.BCELoss(continueDistribution.probs, 1 - data.done[:, 1:])
+            continueLoss         = nn.BCELoss(continueDistribution.probs, 1 - data.dones[:, 1:])
             worldModelLoss      += continueLoss.mean()
 
         self.worldModelOptimizer.zero_grad()
@@ -125,9 +127,9 @@ class Dreamer:
             fullStates.append(fullState)
             logprobs.append(logprob)
             entropies.append(entropy)
-        fullStates  = torch.stack(fullStates,    dim=1)
-        logprobs    = torch.stack(logprobs[1:],  dim=1)
-        entropies   = torch.stack(entropies[1:], dim=1)
+        fullStates  = torch.stack(fullStates,    dim=1) # (batchSize*batchLength, imaginationHorizon, recurrentSize + latentLength*latentClasses)
+        logprobs    = torch.stack(logprobs[1:],  dim=1) # (batchSize*batchLength, imaginationHorizon-1)
+        entropies   = torch.stack(entropies[1:], dim=1) # (batchSize*batchLength, imaginationHorizon-1)
         
         predictedRewards = self.rewardPredictor(fullStates[:, :-1]).mean
         values           = self.critic(fullStates).mean
@@ -161,6 +163,7 @@ class Dreamer:
             "criticValues"  : values.mean().item()}
         return metrics
 
+
     @torch.no_grad()
     def environmentInteraction(self, env, numEpisodes, seed=None, evaluation=False, saveVideo=False, filename="videos/unnamedVideo", fps=30, macroBlockSize=16):
         scores = []
@@ -173,8 +176,8 @@ class Dreamer:
 
             currentScore, stepCount, done, frames = 0, 0, False, []
             while not done:
-                recurrentState = self.recurrentModel(recurrentState, latentState, action)
-                latentState, _   = self.posteriorNet(torch.cat((recurrentState, encodedObservation.view(1, -1)), -1))
+                recurrentState      = self.recurrentModel(recurrentState, latentState, action)
+                latentState, _      = self.posteriorNet(torch.cat((recurrentState, encodedObservation.view(1, -1)), -1))
 
                 action          = self.actor(torch.cat((recurrentState, latentState), -1))
                 actionNumpy     = action.cpu().numpy().reshape(-1)
@@ -185,7 +188,7 @@ class Dreamer:
 
                 if saveVideo and i == 0:
                     frame = env.render()
-                    targetHeight = (frame.shape[0] + macroBlockSize - 1)//macroBlockSize*macroBlockSize # getting rid of imagio error
+                    targetHeight = (frame.shape[0] + macroBlockSize - 1)//macroBlockSize*macroBlockSize # getting rid of imagio warning
                     targetWidth = (frame.shape[1] + macroBlockSize - 1)//macroBlockSize*macroBlockSize
                     frames.append(np.pad(frame, ((0, targetHeight - frame.shape[0]), (0, targetWidth - frame.shape[1]), (0, 0)), mode='edge'))
 
@@ -196,7 +199,6 @@ class Dreamer:
                 stepCount += 1
                 if done:
                     scores.append(currentScore)
-
                     if not evaluation:
                         self.totalEpisodes += 1
                         self.totalEnvSteps += stepCount
@@ -206,7 +208,6 @@ class Dreamer:
                         with imageio.get_writer(finalFilename, fps=fps) as video:
                             for frame in frames:
                                 video.append_data(frame)
-
                     break
         return sum(scores)/numEpisodes if numEpisodes else None
     

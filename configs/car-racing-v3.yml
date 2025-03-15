@@ -19,7 +19,7 @@ dreamer:
     batchLength: 64
     imaginationHorizon: 15
 
-    recurrentSize: 600
+    recurrentSize: 512
     latentLength: 16
     latentClasses: 16
     encodedObsSize: 1024

@@ -34,11 +34,11 @@ def main(configFile):
     dreamer.environmentInteraction(env, config.episodesBeforeStart, seed=config.seed)
 
     iterationsNum = config.gradientSteps // config.replayRatio
-    for _ in range(1, iterationsNum + 1):
-        for _ in range(1, config.replayRatio + 1):
-            data                             = dreamer.buffer.sample(dreamer.config.batchSize, dreamer.config.batchLength)
-            initialStates, worldModelMetrics = dreamer.worldModelTraining(data)
-            actorCriticMetrics               = dreamer.behaviorTraining(initialStates)
+    for _ in range(iterationsNum):
+        for _ in range(config.replayRatio):
+            sampledData                         = dreamer.buffer.sample(dreamer.config.batchSize, dreamer.config.batchLength)
+            initialStates, worldModelMetrics    = dreamer.worldModelTraining(sampledData)
+            behaviorMetrics                     = dreamer.behaviorTraining(initialStates)
             dreamer.totalGradientSteps += 1
 
             if dreamer.totalGradientSteps % config.checkpointInterval == 0 and config.saveCheckpoints:
@@ -50,7 +50,7 @@ def main(configFile):
         mostRecentScore = dreamer.environmentInteraction(env, config.numInteractionEpisodes, seed=config.seed)
         if config.saveMetrics:
             metricsBase = {"envSteps": dreamer.totalEnvSteps, "gradientSteps": dreamer.totalGradientSteps, "totalReward" : mostRecentScore}
-            saveLossesToCSV(metricsFilename, metricsBase | worldModelMetrics | actorCriticMetrics)
+            saveLossesToCSV(metricsFilename, metricsBase | worldModelMetrics | behaviorMetrics)
             plotMetrics(f"{metricsFilename}", savePath=f"{plotFilename}", title=f"{config.environmentName}")
 
 
