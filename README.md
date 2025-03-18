@@ -8,6 +8,8 @@ With no fancy (complex) gear, Natural Dreamer is a natural, that's naturally bea
 <img src="additionalMaterials/OthersVsNaturalDreamer.jpg"/>
 </p>
 
+Want to learn how it works? I made a [tutorial](https://www.youtube.com/watch?v=viXppDhx4R0) with paper, diagrams and code from this repo.
+
 🚧 Warning 🚧: The repo isn't in it's final form, it's still work in progress. Core algorithm works, but I should benchmark it on many types of environments, while right now, only CarRacing-v3 env (continuous actions, image observations) is solved.
 
 
@@ -25,7 +27,7 @@ Environment steps are roughly 10x the gradient steps, so 60k gradient steps is a
 
 ## How to use it?
 
-DreamerV3 tutorial with diagrams, code walkthrough and usage examples has been (or will be) shown on my [YouTube Channel](https://www.youtube.com/@inexperiencedme).
+DreamerV3 usage examples have been shown in my [tutorial](https://www.youtube.com/watch?v=viXppDhx4R0).
 
 To run the code yourself:
 1. Clone the repo
