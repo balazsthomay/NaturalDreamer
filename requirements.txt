@@ -5,3 +5,4 @@ imageio
 pandas
 plotly
 attridict
+pygame

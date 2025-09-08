@@ -100,7 +100,29 @@ class EncoderConv(nn.Module):
 
     def forward(self, x):
         return self.convolutionalNet(x).view(-1, self.outputSize)
+    
+    
+class VectorEncoder(nn.Module):
+    def __init__(self, inputSize, outputSize, config):
+        super().__init__()
+        self.config = config
+        self.outputSize = outputSize
+        self.network = sequentialModel1D(inputSize, [self.config.hiddenSize]*self.config.numLayers, outputSize, self.config.activation)
 
+    def forward(self, x):
+        return self.network(x).view(-1, self.outputSize)
+
+
+class VectorDecoder(nn.Module):
+    def __init__(self, inputSize, outputSize, config):
+        super().__init__()
+        self.config = config
+        self.outputSize = outputSize
+        self.network = sequentialModel1D(inputSize, [self.config.hiddenSize]*self.config.numLayers, outputSize, self.config.activation)
+
+    def forward(self, x):
+        return self.network(x).view(-1, self.outputSize)
+    
 
 class DecoderConv(nn.Module):
     def __init__(self, inputSize, outputShape, config):
@@ -159,3 +181,51 @@ class Critic(nn.Module):
     def forward(self, x):
         mean, logStd = self.network(x).chunk(2, dim=-1)
         return Normal(mean.squeeze(-1), torch.exp(logStd).squeeze(-1))
+
+
+class EnvironmentStatePredictor(nn.Module):
+    def __init__(self, inputSize, max_obstacles, config):
+        super().__init__()
+        self.config = config
+        self.max_obstacles = max_obstacles
+        self.output_size = max_obstacles * 3  # x, y, radius for each obstacle
+        
+        self.network = sequentialModel1D(
+            inputSize, 
+            [self.config.hiddenSize] * self.config.numLayers, 
+            self.output_size, 
+            self.config.activation
+        )
+        
+    def forward(self, x):
+        raw_output = self.network(x)
+        
+        # Reshape to (batch_size, max_obstacles, 3)
+        predictions = raw_output.view(-1, self.max_obstacles, 3)
+        
+        # Apply sigmoid to positions (x, y) to keep in [0,1] range
+        positions = torch.sigmoid(predictions[:, :, 0:2])
+        
+        # Apply sigmoid to radius and scale to reasonable range [0.03, 0.08]
+        radius = torch.sigmoid(predictions[:, :, 2:3]) * 0.05 + 0.03
+        
+        # Concatenate back together
+        processed_predictions = torch.cat([positions, radius], dim=-1)
+        
+        return processed_predictions
+    
+    
+class AdaptationNetwork(nn.Module):
+    def __init__(self, latentSize, config):
+        super().__init__()
+        self.config = config
+        self.adaptation_net = sequentialModel1D(
+            latentSize, 
+            [self.config.hiddenSize], 
+            latentSize, 
+            self.config.activation
+        )
+        
+    def forward(self, latent_state):
+        adaptation = self.adaptation_net(latent_state)
+        return latent_state + adaptation  # Residual connection

@@ -140,6 +140,85 @@ def sequentialModel1D(inputSize, hiddenSizes, outputSize, activationFunction="Ta
     return nn.Sequential(*layers)
 
 
+def computeEnvironmentComplexityMetrics(buffer):
+    """Compute environment complexity metrics from buffer data."""
+    if len(buffer) == 0:
+        return {}
+    
+    difficulties = buffer.difficulty_levels[:len(buffer)] if not buffer.full else buffer.difficulty_levels
+    difficulties = difficulties.flatten()
+    
+    changes = buffer.track_environment_changes()
+    
+    return {
+        'mean_difficulty': float(np.mean(difficulties)),
+        'std_difficulty': float(np.std(difficulties)),
+        'min_difficulty': float(np.min(difficulties)),
+        'max_difficulty': float(np.max(difficulties)),
+        'difficulty_progression': float(np.mean(np.diff(difficulties)) if len(difficulties) > 1 else 0),
+        'num_env_changes': len(changes),
+        'change_frequency': len(changes) / len(buffer) if len(buffer) > 0 else 0
+    }
+
+
+def plotCurriculumMetrics(filename, buffer, title="Curriculum Progress", savePath="curriculumPlot"):
+    """Plot curriculum learning metrics alongside training metrics."""
+    if not filename.endswith(".csv"):
+        filename += ".csv"
+    
+    data = pd.read_csv(filename)
+    
+    # Get environment complexity metrics
+    complexity_metrics = computeEnvironmentComplexityMetrics(buffer)
+    
+    # Create subplot figure
+    fig = pgo.Figure()
+    
+    # Plot training metrics
+    colors = ["gold", "coral", "dodgerblue", "forestgreen", "mediumorchid"]
+    for idx, column in enumerate(data.columns):
+        if column in ["envSteps", "gradientSteps"]:
+            continue
+        smoothed_data = data[column].rolling(window=10, min_periods=1).mean()
+        fig.add_trace(pgo.Scatter(
+            x=data["gradientSteps"], y=smoothed_data, mode='lines',
+            name=f"{column}",
+            line=dict(color=colors[idx % len(colors)], width=2),
+            yaxis="y"))
+    
+    # Add difficulty progression if buffer has data
+    if len(buffer) > 0:
+        difficulties = buffer.difficulty_levels[:len(buffer)] if not buffer.full else buffer.difficulty_levels
+        difficulties = difficulties.flatten()
+        
+        # Create x-axis aligned with gradient steps (approximate)
+        if len(data) > 0:
+            x_difficulty = np.linspace(data["gradientSteps"].iloc[0], data["gradientSteps"].iloc[-1], len(difficulties))
+            
+            fig.add_trace(pgo.Scatter(
+                x=x_difficulty, y=difficulties, mode='lines',
+                name="Difficulty Level",
+                line=dict(color="red", width=3, dash="dash"),
+                yaxis="y2"))
+    
+    # Update layout with dual y-axis
+    fig.update_layout(
+        title=dict(text=f"{title}<br>Mean Difficulty: {complexity_metrics.get('mean_difficulty', 0):.3f}, Changes: {complexity_metrics.get('num_env_changes', 0)}",
+                   x=0.5, font=dict(size=20)),
+        xaxis=dict(title="Gradient Steps"),
+        yaxis=dict(title="Training Metrics", side="left"),
+        yaxis2=dict(title="Difficulty Level", side="right", overlaying="y", range=[0, 1]),
+        template="plotly_dark",
+        height=800,
+        width=1200,
+        legend=dict(x=0.02, y=0.98)
+    )
+    
+    if not savePath.endswith(".html"):
+        savePath += ".html"
+    fig.write_html(savePath)
+
+
 def computeLambdaValues(rewards, values, continues, lambda_=0.95):
     returns = torch.zeros_like(rewards)
     bootstrap = values[:, -1]

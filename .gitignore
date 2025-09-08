@@ -1,5 +1,7 @@
 __pycache__
 checkpoints
+!checkpoints/adaptive-course_BalancedTraining_46k.pth
+!checkpoints/adaptive-course_BalancedTraining_2k.pth
 metrics
 plots
 videos
@@ -7,3 +9,7 @@ test.ipynb
 visualizations
 mainVisualizations.py
 dreamerVisual.py
+project_plan.md
+venv/
+test_adaptive_env.py
+visualize_env.py

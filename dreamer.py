@@ -4,7 +4,7 @@ from torch.distributions import kl_divergence, Independent, OneHotCategoricalStr
 import numpy as np
 import os
 
-from networks import RecurrentModel, PriorNet, PosteriorNet, RewardModel, ContinueModel, EncoderConv, DecoderConv, Actor, Critic
+from networks import RecurrentModel, PriorNet, PosteriorNet, RewardModel, ContinueModel, EncoderConv, DecoderConv, Actor, Critic, EnvironmentStatePredictor, VectorEncoder, VectorDecoder
 from utils import computeLambdaValues, Moments
 from buffer import ReplayBuffer
 import imageio
@@ -23,14 +23,24 @@ class Dreamer:
 
         self.actor           = Actor(self.fullStateSize, actionSize, actionLow, actionHigh, device,                                  config.actor          ).to(self.device)
         self.critic          = Critic(self.fullStateSize,                                                                            config.critic         ).to(self.device)
-        self.encoder         = EncoderConv(observationShape, self.config.encodedObsSize,                                             config.encoder        ).to(self.device)
-        self.decoder         = DecoderConv(self.fullStateSize, observationShape,                                                     config.decoder        ).to(self.device)
+        # Use VectorEncoder for vector observations, EncoderConv for images
+        if len(observationShape) == 1:  # Vector observations
+            self.encoder = VectorEncoder(observationShape[0], self.config.encodedObsSize, config.encoder).to(self.device)
+        else:  # Image observations  
+            self.encoder = EncoderConv(observationShape, self.config.encodedObsSize, config.encoder).to(self.device)
+        # Use VectorDecoder for vector observations, DecoderConv for images
+        if len(observationShape) == 1:  # Vector observations
+            self.decoder = VectorDecoder(self.fullStateSize, observationShape[0], config.decoder).to(self.device)
+        else:  # Image observations
+            self.decoder = DecoderConv(self.fullStateSize, observationShape, config.decoder).to(self.device)
         self.recurrentModel  = RecurrentModel(config.recurrentSize, self.latentSize, actionSize,                                     config.recurrentModel ).to(self.device)
         self.priorNet        = PriorNet(config.recurrentSize, config.latentLength, config.latentClasses,                             config.priorNet       ).to(self.device)
         self.posteriorNet    = PosteriorNet(config.recurrentSize + config.encodedObsSize, config.latentLength, config.latentClasses, config.posteriorNet   ).to(self.device)
         self.rewardPredictor = RewardModel(self.fullStateSize,                                                                       config.reward         ).to(self.device)
         if config.useContinuationPrediction:
             self.continuePredictor  = ContinueModel(self.fullStateSize,                                                              config.continuation   ).to(self.device)
+        if config.useEnvironmentPrediction:
+            self.environmentPredictor = EnvironmentStatePredictor(self.fullStateSize, config.max_obstacles, config.environmentPredictor).to(self.device)
 
         self.buffer         = ReplayBuffer(observationShape, actionSize, config.buffer, device)
         self.valueMoments   = Moments(device)
@@ -39,6 +49,8 @@ class Dreamer:
                                      list(self.priorNet.parameters()) + list(self.posteriorNet.parameters()) + list(self.rewardPredictor.parameters()))
         if self.config.useContinuationPrediction:
             self.worldModelParameters += list(self.continuePredictor.parameters())
+        if self.config.useEnvironmentPrediction:
+            self.worldModelParameters += list(self.environmentPredictor.parameters())
 
         self.worldModelOptimizer    = torch.optim.Adam(self.worldModelParameters,   lr=self.config.worldModelLR)
         self.actorOptimizer         = torch.optim.Adam(self.actor.parameters(),     lr=self.config.actorLR)
@@ -100,6 +112,14 @@ class Dreamer:
             continueDistribution = self.continuePredictor(fullStates)
             continueLoss         = nn.BCELoss(continueDistribution.probs, 1 - data.dones[:, 1:])
             worldModelLoss      += continueLoss.mean()
+        if self.config.useEnvironmentPrediction:
+            environmentPredictions = self.environmentPredictor(fullStates)
+            # Reshape predictions from (batch*seq, max_obstacles, 3) to (batch*seq, 18)
+            environmentPredictions = environmentPredictions.reshape(environmentPredictions.shape[0], -1)
+            # Reshape target to match
+            target_env_state = data.environment_state[:, 1:].reshape(-1, data.environment_state.shape[-1])
+            environmentLoss = nn.MSELoss()(environmentPredictions, target_env_state)
+            worldModelLoss += self.config.environmentLossWeight * environmentLoss
 
         self.worldModelOptimizer.zero_grad()
         worldModelLoss.backward()
@@ -116,7 +136,7 @@ class Dreamer:
 
 
     def behaviorTraining(self, fullState):
-        recurrentState, latentState = torch.split(fullState, (self.recurrentSize, self.latentSize), -1)
+        recurrentState, latentState = torch.split(fullState, [self.recurrentSize, self.latentSize], -1)
         fullStates, logprobs, entropies = [], [], []
         for _ in range(self.config.imaginationHorizon):
             action, logprob, entropy = self.actor(fullState.detach(), training=True)
@@ -127,6 +147,8 @@ class Dreamer:
             fullStates.append(fullState)
             logprobs.append(logprob)
             entropies.append(entropy)
+            if self.config.useEnvironmentPrediction:
+                self.environmentPredictor(fullState.detach())
         fullStates  = torch.stack(fullStates,    dim=1) # (batchSize*batchLength, imaginationHorizon, recurrentSize + latentLength*latentClasses)
         logprobs    = torch.stack(logprobs[1:],  dim=1) # (batchSize*batchLength, imaginationHorizon-1)
         entropies   = torch.stack(entropies[1:], dim=1) # (batchSize*batchLength, imaginationHorizon-1)
@@ -184,13 +206,37 @@ class Dreamer:
 
                 nextObservation, reward, done = env.step(actionNumpy)
                 if not evaluation:
-                    self.buffer.add(observation, actionNumpy, reward, nextObservation, done)
+                    # Extract difficulty from adaptive environment (traverse wrapper chain)
+                    difficulty = 0.0
+                    current_env = env
+                    while hasattr(current_env, 'env'):
+                        current_env = current_env.env
+                        if hasattr(current_env, 'difficulty'):
+                            difficulty = current_env.difficulty
+                            break
+                    
+                    # Extract environment state from adaptive environment
+                    environment_state = None
+                    if hasattr(current_env, 'obstacles') and hasattr(current_env, 'max_obstacles'):
+                        # Flatten obstacle data: [(x,y,r), (x,y,r), ...] -> [x,y,r,x,y,r,...]
+                        state_data = []
+                        for i in range(current_env.max_obstacles):
+                            if i < len(current_env.obstacles):
+                                x, y, r = current_env.obstacles[i]
+                                state_data.extend([x, y, r])
+                            else:
+                                state_data.extend([0.0, 0.0, 0.0])  # Padding
+                        environment_state = np.array(state_data, dtype=np.float32)
+                    
+                    self.buffer.add(observation, actionNumpy, reward, nextObservation, done, 
+                                   environment_state=environment_state, difficulty=difficulty)
 
                 if saveVideo and i == 0:
                     frame = env.render()
-                    targetHeight = (frame.shape[0] + macroBlockSize - 1)//macroBlockSize*macroBlockSize # getting rid of imagio warning
-                    targetWidth = (frame.shape[1] + macroBlockSize - 1)//macroBlockSize*macroBlockSize
-                    frames.append(np.pad(frame, ((0, targetHeight - frame.shape[0]), (0, targetWidth - frame.shape[1]), (0, 0)), mode='edge'))
+                    if frame is not None:  # Only process frame if render returned something
+                        targetHeight = (frame.shape[0] + macroBlockSize - 1)//macroBlockSize*macroBlockSize # getting rid of imagio warning
+                        targetWidth = (frame.shape[1] + macroBlockSize - 1)//macroBlockSize*macroBlockSize
+                        frames.append(np.pad(frame, ((0, targetHeight - frame.shape[0]), (0, targetWidth - frame.shape[1]), (0, 0)), mode='edge'))
 
                 encodedObservation = self.encoder(torch.from_numpy(nextObservation).float().unsqueeze(0).to(self.device))
                 observation = nextObservation
@@ -203,7 +249,7 @@ class Dreamer:
                         self.totalEpisodes += 1
                         self.totalEnvSteps += stepCount
 
-                    if saveVideo and i == 0:
+                    if saveVideo and i == 0 and frames:  # Only save video if we have frames
                         finalFilename = f"{filename}_reward_{currentScore:.0f}.mp4"
                         with imageio.get_writer(finalFilename, fps=fps) as video:
                             for frame in frames:
@@ -233,6 +279,8 @@ class Dreamer:
             'totalGradientSteps'    : self.totalGradientSteps}
         if self.config.useContinuationPrediction:
             checkpoint['continuePredictor'] = self.continuePredictor.state_dict()
+        if self.config.useEnvironmentPrediction:
+            checkpoint['environmentPredictor'] = self.environmentPredictor.state_dict()
         torch.save(checkpoint, checkpointPath)
 
 
@@ -259,4 +307,6 @@ class Dreamer:
         self.totalGradientSteps = checkpoint['totalGradientSteps']
         if self.config.useContinuationPrediction:
             self.continuePredictor.load_state_dict(checkpoint['continuePredictor'])
+        if self.config.useEnvironmentPrediction:
+            self.environmentPredictor.load_state_dict(checkpoint['environmentPredictor'])
 

@@ -29,6 +29,31 @@ class CleanGymWrapper(gym.Wrapper):
         done = terminated or truncated
         return obs, reward, done
 
-    def reset(self, seed=None):
-        obs, info = self.env.reset(seed=seed)
+    def reset(self, seed=None, options=None):
+        obs, info = self.env.reset(seed=seed, options=options)
         return obs
+    
+# Simple wrappers for Dreamer integration
+
+class VectorObservationWrapper(gym.ObservationWrapper):
+    """Ensures vector observations are float32."""
+    
+    def observation(self, obs):
+        return np.array(obs, dtype=np.float32)
+
+
+class EnvironmentStateWrapper(gym.Wrapper):
+    """Simple curriculum learning tracking."""
+    
+    def __init__(self, env):
+        super().__init__(env)
+        self.episode_count = 0
+        
+    def step(self, action):
+        obs, reward, done = self.env.step(action)
+        if done:
+            self.episode_count += 1
+        return obs, reward, done
+    
+    def get_curriculum_metrics(self):
+        return {'episode_count': self.episode_count}

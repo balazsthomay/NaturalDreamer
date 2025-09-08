@@ -1,0 +1,105 @@
+environmentName: adaptive-course
+runName: BalancedTraining
+seed: 1
+
+# Balanced config - middle ground between fast and original
+gradientSteps: 30000  # 2x fast config
+replayRatio: 50       # Between fast(30) and original(100)
+saveMetrics: True
+saveCheckpoints: True
+checkpointInterval: 1500  # Slightly more frequent saves
+resume: True
+checkpointToLoad: 16k
+
+episodesBeforeStart: 20
+numInteractionEpisodes: 1
+numEvaluationEpisodes: 1
+
+dreamer:
+    batchSize: 24      # Between fast(16) and original(32)
+    batchLength: 48    # Between fast(32) and original(64)
+    imaginationHorizon: 12  # Between fast(10) and original(15)
+
+    recurrentSize: 384     # Between fast(256) and original(512)
+    latentLength: 12       # Between fast(8) and original(16)
+    latentClasses: 12      # Between fast(8) and original(16)
+    encodedObsSize: 48     # Between fast(32) and original(64)
+
+    # Environment prediction settings
+    useEnvironmentPrediction: True
+    max_obstacles: 6
+    environmentLossWeight: 0.1
+
+    useContinuationPrediction: False
+    actorLR: 0.00006      # Lower than fast config for stability
+    criticLR: 0.00015     # Lower than fast config
+    worldModelLR: 0.0003  # Lower than fast config
+    gradientNormType: 2
+    gradientClip: 100
+
+    discount: 0.995       # Between fast(0.99) and original(0.997)
+    lambda_: 0.92         # Between fast(0.9) and original(0.95)
+    freeNats: 1
+    betaPrior: 1.0
+    betaPosterior: 0.1
+    entropyScale: 0.0005  # Between fast and original
+
+    buffer:
+        capacity: 35000   # Between fast(20k) and original(50k)
+
+    encoder: 
+        hiddenSize: 200   # Increased from fast config
+        numLayers: 2      # Keep 2 layers
+        activation: Tanh
+
+    decoder: 
+        hiddenSize: 200
+        numLayers: 2
+        activation: Tanh
+
+    recurrentModel: 
+        hiddenSize: 200   # Increased from fast config
+        activation: Tanh
+
+    priorNet: 
+        hiddenSize: 200   # Increased from fast config
+        numLayers: 2
+        activation: Tanh
+        uniformMix: 0.01
+
+    posteriorNet:
+        hiddenSize: 200   # Increased from fast config
+        numLayers: 2
+        activation: Tanh
+        uniformMix: 0.01
+        
+    reward:
+        hiddenSize: 300   # Between fast(200) and original(400)
+        numLayers: 2
+        activation: Tanh
+
+    continuation:
+        hiddenSize: 300
+        numLayers: 2
+        activation: Tanh
+    
+    actor:
+        hiddenSize: 300   # Between fast(200) and original(400)
+        numLayers: 2
+        activation: Tanh
+
+    critic: 
+        hiddenSize: 300
+        numLayers: 2
+        activation: Tanh
+
+    environmentPredictor:
+        hiddenSize: 200   # Increased from fast config
+        numLayers: 2
+        activation: Tanh
+
+folderNames:
+    metricsFolder: metrics
+    plotsFolder: plots
+    checkpointsFolder: checkpoints
+    videosFolder: videos
